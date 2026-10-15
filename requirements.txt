@@ -1,0 +1,8 @@
+streamlit>=1.50
+pandas>=2.0
+numpy>=1.24
+openpyxl>=3.1
+# Only needed when connecting to real BigQuery / GCS:
+# google-cloud-bigquery>=3.10
+# google-cloud-storage>=2.10
+# pyarrow>=14
