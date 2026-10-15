@@ -1,8 +1,8 @@
 """
 Supply Chain Tools — one Streamlit app with a shared landing page and a separate sign-in for:
 
-  • Allocation Planner       (apps/allocation_planner.py)  — monthly COM inventory allocation
-  • Dynamic Fulfillment      (apps/dynamic_fulfillment.py) — product exclusion tool
+  • Allocation Planner       (/allocation_planner.py)  — monthly COM inventory allocation
+  • Dynamic Fulfillment      (/dynamic_fulfillment.py) — product exclusion tool
 
 Run:
     pip install -r requirements.txt
@@ -68,7 +68,7 @@ TOOLS = {
         "can": ["Check where inventory is going, by building and department",
                 "Change storage types, min / max targets, building capacity and departments",
                 "Publish the plan or download it as Excel"],
-        "file": HERE / "apps" / "allocation_planner.py",
+        "file": HERE / "" / "allocation_planner.py",
         "layout": "wide",
         "demo": ("yogesh", "Yogesh", "planner123"),
     },
@@ -82,7 +82,7 @@ TOOLS = {
         "can": ["Exclude products from CS Margin, Sellout Risk, Replenishment or VDF Margin",
                 "Bring excluded products back",
                 "Check which processes a product is excluded from"],
-        "file": HERE / "apps" / "dynamic_fulfillment.py",
+        "file": HERE / "" / "dynamic_fulfillment.py",
         "layout": "centered",
         "demo": ("df.user", "DF User", "df@123"),
     },
@@ -276,7 +276,7 @@ def run_tool(key: str):
         with st.sidebar:
             sidebar()
         st.error(f"**{t['name']}** can't start: the file `{rel}` is missing from the deployed app.\n\n"
-                 f"Make sure the `apps` folder is in the repository next to `streamlit_app.py`.")
+                 f"Make sure the `` folder is in the repository next to `streamlit_app.py`.")
         st.caption("Python files found: " + ", ".join(f"`{f}`" for f in found))
         return
     try:
