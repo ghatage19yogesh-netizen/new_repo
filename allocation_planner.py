@@ -100,7 +100,7 @@ def check_login(users, username, password):
 # ======================================================================================
 # Demo optimizer output (static sample of results_output.pkl — no optimizer code here)
 # ======================================================================================
-DEMO_VERSION = 2
+DEMO_VERSION = 3
 # Buildings, capacities and min / max penetration as in the planner input email (October).
 DEMO_CFCS = [("10189", "Bailey Road"), ("11290", "China Grove"), ("9615", "Goodyear"),
              ("7972", "Joppa"), ("9609", "Portland"), ("9610", "Martinsburg (W. Virginia)")]
@@ -119,6 +119,8 @@ DEMO_CAPACITY = {  # storage type -> {CFC ID: capacity units}
 DEMO_LIMITS = {
     "min_pct": {"10189": 2.0, "11290": 10.0, "9615": 21.0, "7972": 0.0, "9609": 25.0, "9610": 26.0},
     "max_pct": {"10189": 5.0, "11290": 15.0, "9615": 25.0, "7972": 99.0, "9609": 30.0, "9610": 33.0},
+    # smallest number of units a building may hold of a product (0 or at least this many)
+    "alloc_min_units": {"10189": 1000.0, "11290": 1000.0, "9615": 1000.0, "7972": 1000.0, "9609": 1000.0, "9610": 1000.0},
 }
 # Bailey Road: FLA capacity is pooled with HFG
 DEMO_POOLED = [("10189", "FLA+HFG", 1_600_000)]
@@ -551,7 +553,7 @@ def landing_page():
                 '</div>', unsafe_allow_html=True)
 
     st.write(""); st.write("")
-    st.markdown('<h2 class="lp-sec">What you can change</h2><p class="lp-sub">The four questions from the '
+    st.markdown('<h2 class="lp-sec">What you can change</h2><p class="lp-sub">The questions from the '
                 'monthly planner input.</p><div class="lp-feat">'
                 '<div class="lp-f"><b>1 · Storage types</b><span>Include or exclude a storage type (e.g. jewelry), '
                 'or add a new one.</span></div>'
@@ -561,6 +563,8 @@ def landing_page():
                 'including shared limits like Bailey Road FLA + HFG.</span></div>'
                 '<div class="lp-f"><b>4 · Departments</b><span>Leave out groups such as Big Ticket and Food, or '
                 'single departments.</span></div>'
+                '<div class="lp-f"><b>5 · Min allocation units</b><span>Set alloc_min_units — the smallest number '
+                'of units a building may hold of a product.</span></div>'
                 '<div class="lp-f"><b>Built-in checks</b><span>Flags buildings outside their targets, over '
                 'capacity, or a plan that was already published.</span></div>'
                 '<div class="lp-f"><b>History</b><span>See who published which month, and every change they '
@@ -834,7 +838,7 @@ def page_output():
     if len(a):
         tables = derive_tables(adj_out, {"run_id": run_id, "target_month": "", "env": "", "model_version": "",
                                          "notes": ""}, "", "")
-        checks += plan_checks(tables, adj_out["limits"])
+        checks += plan_checks(tables, adj_out["limits"], a)
     errors = any(c["level"] == "error" for c in checks)
 
     st.markdown("#### The plan after your changes")
@@ -880,9 +884,9 @@ def page_output():
         st.caption("Fix the items in red above to continue.")
 
 
-# ---------- adjustments: the 4 questions of the planner input email ----------
+# ---------- adjustments: the questions of the planner input email ----------
 #   1. storage types to include / exclude   2. min / max penetration per building
-#   3. building capacities (+ pooled caps)  4. departments to exclude
+#   3. building capacities (+ pooled caps)  4. departments to exclude  5. alloc_min_units per building
 def _dept(pt) -> str:
     return str(pt).split("-")[0]
 
@@ -902,8 +906,10 @@ def _init_adjust(out: dict, sig):
         lm = lim.assign(warehouse=lim["warehouse"].astype(str)).set_index("warehouse")
         wide["min_pct"] = wide["warehouse_id"].map(lm["min_pct"]).astype(float)
         wide["max_pct"] = wide["warehouse_id"].map(lm["max_pct"]).astype(float)
+        wide["alloc_min_units"] = (wide["warehouse_id"].map(lm["alloc_min_units"]).astype(float)
+                                   if "alloc_min_units" in lm.columns else float("nan"))
     else:
-        wide["min_pct"], wide["max_pct"] = float("nan"), float("nan")
+        wide["min_pct"], wide["max_pct"], wide["alloc_min_units"] = float("nan"), float("nan"), float("nan")
     for k in storages:
         if cap is not None:
             m = cap.assign(warehouse=cap["warehouse"].astype(str), storage=cap["storage"].astype(str))
@@ -975,9 +981,9 @@ def adjust_section(out: dict):
     a["dept_group"] = a["dept"].map(dict(dm[["dept_nbr", "dept_group"]].values)).fillna("")
 
     st.markdown("#### Adjust before publishing")
-    st.caption("The four questions from the monthly planner input. Change anything here — the plan below updates straight away.")
-    t1, t2, t3, t4 = st.tabs(["1 · Storage types", "2 · Min / max penetration", "3 · Building capacity",
-                              "4 · Departments"])
+    st.caption("The questions from the monthly planner input. Change anything here — the plan below updates straight away.")
+    t1, t2, t3, t4, t5 = st.tabs(["1 · Storage types", "2 · Min / max penetration", "3 · Building capacity",
+                                  "4 · Departments", "5 · Min allocation units"])
     with t1:
         st.caption("Which storage types do we want to include? Untick a type to leave it out of the plan.")
         inc = st.multiselect("Storage types to include", ss["storage_list"], key="inc_storage")
@@ -1041,9 +1047,9 @@ def adjust_section(out: dict):
                                                                     units=("units", "sum"))
         tbl["dept_name"] = tbl["dept"].map(dict(dm[["dept_nbr", "dept_name"]].values)).fillna("")
         tbl["excluded"] = tbl["dept"].isin(excl) | tbl["dept_group"].isin(excl_g)
-        st.dataframe(tbl[["dept", "dept_name", "dept_group", "product_types", "units", "excluded"]],
+        st.dataframe(tbl[["dept", "dept_name", "product_types", "units", "excluded"]],
                      hide_index=True, width="stretch", column_config={
-                         "dept": "Dept", "dept_name": "Department", "dept_group": "Group", "product_types": "Products", "excluded": "Excluded",
+                         "dept": "Dept", "dept_name": "Department", "product_types": "Products", "excluded": "Excluded",
                          "units": st.column_config.NumberColumn("Units", format="localized")})
 
     # ---- apply
@@ -1056,15 +1062,46 @@ def adjust_section(out: dict):
     cap_long = b[["warehouse_id"] + stor_cols].melt(id_vars=["warehouse_id"], var_name="storage", value_name="capacity") \
         .rename(columns={"warehouse_id": "warehouse"})
     cap_long = cap_long[cap_long["storage"].isin(inc)].dropna(subset=["capacity"])[["warehouse", "storage", "capacity"]]
-    lim = b[["warehouse_id", "min_pct", "max_pct"]].rename(columns={"warehouse_id": "warehouse"})
+    lim = b[["warehouse_id", "min_pct", "max_pct", "alloc_min_units"]].rename(columns={"warehouse_id": "warehouse"})
     locs = {str(w): (l or "") for w, l in b[["warehouse_id", "location"]].values}
+
+    with t5:
+        st.caption("What is the minimum allocation per building? alloc_min_units = the smallest number of units a "
+                   "building may hold of a product — it gets either none or at least this many. Leave empty for no minimum.")
+        cols = ["warehouse_id", "location", "alloc_min_units"]
+        ed = st.data_editor(ss["bld_saved"][cols], key=f"minu_{ss['bld_ver']}", hide_index=True, width="stretch",
+                            disabled=["warehouse_id", "location"], column_config={
+                                "warehouse_id": "ID", "location": "Location",
+                                "alloc_min_units": st.column_config.NumberColumn("alloc_min_units", min_value=0,
+                                                                                 step=100, format="localized")})
+        _save_editor(ed, "bld_saved", "bld_ver", cols)
+        c1, c2 = st.columns([2, 1])
+        all_v = c1.number_input("Set the same alloc_min_units for every building", min_value=0, step=500,
+                                value=None, placeholder="e.g. 5000", key="minu_all")
+        c2.write(""); c2.write("")
+        if c2.button("Apply to all buildings", disabled=all_v is None, width="stretch"):
+            bb = ss["bld_saved"].copy(); bb["alloc_min_units"] = float(all_v)
+            ss["bld_saved"] = bb; ss["bld_ver"] += 1
+            st.rerun()
+        below = _below_min_units(a2, lim)
+        if len(below):
+            st.markdown(f"**{len(below)} product{'s' if len(below) != 1 else ''} below the minimum** in the current plan "
+                        "— the planning model will either raise these to the minimum or drop them from that building.")
+            below = below.assign(location=below["warehouse"].map(locs))
+            st.dataframe(below[["warehouse", "location", "product_type", "units", "alloc_min_units"]], hide_index=True,
+                         width="stretch", column_config={
+                             "warehouse": "ID", "location": "Location", "product_type": "Product",
+                             "units": st.column_config.NumberColumn("Units in plan", format="localized"),
+                             "alloc_min_units": st.column_config.NumberColumn("alloc_min_units", format="localized")})
+        else:
+            st.caption("✓ Every product in the plan meets its building's minimum.")
     pooled = ss["pool_saved"].dropna(subset=["warehouse_id", "storage_types"])
 
     orig = ss["bld_orig"].set_index("warehouse_id")
 
     def _num(v):
         return float(v) if pd.notna(v) else None
-    cap_changes, pen_changes = [], []
+    cap_changes, pen_changes, min_units_changes = [], [], []
     for _, r in b.iterrows():
         w = r["warehouse_id"]
         for k in stor_cols:
@@ -1076,12 +1113,16 @@ def adjust_section(out: dict):
             old = _num(orig.at[w, c]) if w in orig.index else None
             if old != _num(r[c]):
                 pen_changes.append({"warehouse_id": w, "location": r["location"], "field": c, "from": old, "to": _num(r[c])})
+        old = _num(orig.at[w, "alloc_min_units"]) if w in orig.index and "alloc_min_units" in orig.columns else None
+        if old != _num(r["alloc_min_units"]):
+            min_units_changes.append({"warehouse_id": w, "location": r["location"], "from": old,
+                                      "to": _num(r["alloc_min_units"])})
     loc_changes = {w: l for w, l in locs.items() if w in orig.index and l != (orig.at[w, "location"] or "")}
     po = ss["pool_orig"]
     pool_changed = not pooled.reset_index(drop=True).equals(po.reset_index(drop=True))
     adjustments = {
         "excluded_storage": [k for k in ss["storage_list"] if k not in inc], "added_storage": ss["added_storage"],
-        "penetration_changes": pen_changes, "capacity_changes": cap_changes,
+        "penetration_changes": pen_changes, "capacity_changes": cap_changes, "min_units_changes": min_units_changes,
         "pooled_capacity": pooled.to_dict(orient="records") if pool_changed else [],
         "excluded_dept_groups": excl_g if sorted(excl_g) != sorted(ss.get("excl_groups_orig", [])) else [],
         "excluded_departments": [_dept_label(d) for d in excl],
@@ -1095,7 +1136,20 @@ def adjust_section(out: dict):
     return adj, adjustments
 
 
-def plan_checks(tables: dict, limits: pd.DataFrame) -> list[dict]:
+def _below_min_units(alloc: pd.DataFrame, limits: pd.DataFrame) -> pd.DataFrame:
+    """Building × product totals that are above zero but below that building's alloc_min_units."""
+    if limits is None or "alloc_min_units" not in limits.columns or not len(alloc):
+        return pd.DataFrame(columns=["warehouse", "product_type", "units", "alloc_min_units"])
+    g = alloc.assign(warehouse=alloc["warehouse"].astype(str),
+                     units=pd.to_numeric(alloc["units"], errors="coerce").fillna(0)) \
+        .groupby(["warehouse", "product_type"], as_index=False)["units"].sum()
+    m = limits.assign(warehouse=limits["warehouse"].astype(str))[["warehouse", "alloc_min_units"]]
+    g = g.merge(m, on="warehouse", how="left")
+    mu = pd.to_numeric(g["alloc_min_units"], errors="coerce")
+    return g[(g["units"] > 0) & mu.notna() & (g["units"] < mu)].sort_values(["warehouse", "units"]).reset_index(drop=True)
+
+
+def plan_checks(tables: dict, limits: pd.DataFrame, alloc: pd.DataFrame = None) -> list[dict]:
     """Business checks on the adjusted plan: penetration targets, capacity, pooled caps."""
     out = []
     l = limits
@@ -1121,6 +1175,12 @@ def plan_checks(tables: dict, limits: pd.DataFrame) -> list[dict]:
     if len(nocap):
         out.append({"level": "warn", "text": "Units placed where no capacity is set: " + ", ".join(
             f"{r.location or r.warehouse_id} {r.storage}" for r in nocap.itertuples())})
+    if alloc is not None:
+        below = _below_min_units(alloc, limits)
+        out.append({"level": "warn" if len(below) else "ok",
+                    "text": "Every product meets its building's minimum allocation (alloc_min_units)" if not len(below) else
+                    f"{len(below)} product{'s' if len(below) != 1 else ''} below the building's alloc_min_units "
+                    "— see tab 5 · Min allocation units"})
     return out
 
 
@@ -1275,7 +1335,7 @@ def main():
         st.radio("Navigate", list(PAGES), key="page", label_visibility="collapsed")
         with st.expander("How to use"):
             st.markdown("1. **Review & adjust** — check the plan and enter this month's changes: storage types, "
-                        "min / max targets, building capacity, departments.\n"
+                        "min / max targets, building capacity, departments, min allocation units.\n"
                         "2. **Publish** — share the plan for reports, or download it as Excel.")
         if "PORTAL" not in globals():
             st.divider()
